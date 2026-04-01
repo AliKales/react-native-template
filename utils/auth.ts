@@ -26,24 +26,47 @@ export async function saveAuthSession(session: AuthSession) {
     }
 }
 
+export async function refreshAuthSession(): Promise<AuthSession | null> {
+    try {
+        const sessionString = await SecureStore.getItemAsync(getKey());
+        if (!sessionString) return null
+        const session = JSON.parse(sessionString) as AuthSession
+
+        const response = await fetch(`${API_URL}/auth/refresh-token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: session.refresh_token }),
+        });
+
+        if (response.ok) {
+            const body = await response.json()
+            await saveAuthSession(body.token)
+            return body.token as AuthSession
+        }
+
+        await clearAuthSession()
+
+        return null
+    } catch (error) {
+        await clearAuthSession()
+
+        return null
+    }
+}
+
 export async function getAuthSession(): Promise<AuthSession | null> {
     try {
         const sessionString = await SecureStore.getItemAsync(getKey());
         if (!sessionString) return null
         const session = JSON.parse(sessionString) as AuthSession
 
-        const now = new Date()
-        
-        const sessionDate = modifyDate(new Date(session.access_token_expires_at), -2, 'minute')
+        const nowUTC = Date.now();
+        const expiresUTC = new Date(session.access_token_expires_at).getTime();
+        // Subtract 2 minutes (120,000 milliseconds) as a buffer
+        const bufferTime = 2 * 60 * 1000;
 
-        if (now < sessionDate) {            
+        if (nowUTC < (expiresUTC - bufferTime)) {
             return session
-        }
-
-        if (now > new Date(session.refresh_token_expires_at)) {
-            router.replace("/login")
-
-            return null;
         }
 
         const response = await fetch(`${API_URL}/auth/refresh-token`, {
@@ -55,17 +78,19 @@ export async function getAuthSession(): Promise<AuthSession | null> {
         if (response.ok) {
             const body = await response.json()
             await saveAuthSession(body.token)
-            return body as AuthSession
+            return body.token as AuthSession
         }
+
+        await clearAuthSession()
 
         router.replace("/login")
 
         return null;
     } catch (error) {
+        await clearAuthSession()
+
         router.replace("/login")
         console.error(error)
-
-        await clearAuthSession()
 
         return null;
     }
